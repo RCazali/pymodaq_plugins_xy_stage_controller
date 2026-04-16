@@ -14,8 +14,8 @@ from pymodaq.extensions.utils import CustomExt
 logger = set_logger(get_module_name(__file__))
 main_config = Config()
 
-EXTENSION_NAME = 'Dual Axis Controller'
-CLASS_NAME = 'DualAxisController'
+EXTENSION_NAME = 'XY stage Controller'
+CLASS_NAME = 'XYStageController'
 
 
 UNIT_MULTIPLIERS = {
@@ -464,7 +464,7 @@ class StageMapWidget(QtWidgets.QWidget):
 # ===========================================================================
 # Main extension class
 # ===========================================================================
-class DualAxisController(CustomExt):
+class XYStageController(CustomExt):
     """
     Two-axis stage controller:
     - Per-axis unit selector
