@@ -114,3 +114,6 @@ venv.bak/
 
 *yacctab.py
 *lextab.py
+
+# vscode
+.vscode

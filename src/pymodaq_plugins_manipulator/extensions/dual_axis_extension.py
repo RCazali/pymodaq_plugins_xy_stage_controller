@@ -17,8 +17,6 @@ main_config = Config()
 EXTENSION_NAME = 'Dual Axis Controller'
 CLASS_NAME = 'DualAxisController'
 
-# Positions file saved next to pymodaq local config
-POSITIONS_FILE = Path.home() / '.pymodaq' / 'dual_axis_positions.json'
 
 UNIT_MULTIPLIERS = {
     'nm':    1e-3,
@@ -313,8 +311,9 @@ class SavedPositionsWidget(QtWidgets.QWidget):
 class StageMapWidget(QtWidgets.QWidget):
     """pyqtgraph PlotWidget showing current XY position vs stage limits."""
 
-    def __init__(self, parent=None):
+    def __init__(self, limits_file: Path, parent=None):
         super().__init__(parent)
+        self._file = limits_file
         self._setup_ui()
         self._x = 0.0
         self._y = 0.0
@@ -333,11 +332,13 @@ class StageMapWidget(QtWidgets.QWidget):
             sb.setDecimals(3)
             sb.setValue(val)
             return sb
+        xmin, xmax, ymin, ymax = self._load_limits()
+        self.x_min_sb = make_spin(xmin)
+        self.x_max_sb = make_spin(xmax)
+        self.y_min_sb = make_spin(ymin)
+        self.y_max_sb = make_spin(ymax)
+        # self._update_limits()
 
-        self.x_min_sb = make_spin(-10.0)
-        self.x_max_sb = make_spin( 10.0)
-        self.y_min_sb = make_spin(-10.0)
-        self.y_max_sb = make_spin( 10.0)
 
         x_row = QtWidgets.QHBoxLayout()
         x_row.addWidget(self.x_min_sb)
@@ -356,6 +357,9 @@ class StageMapWidget(QtWidgets.QWidget):
         btn_apply.clicked.connect(self._update_limits)
         lim_layout.addRow(btn_apply)
         layout.addWidget(lim_group)
+        btn_save = QtWidgets.QPushButton("Save limits")
+        btn_save.clicked.connect(self._save_limits)
+        lim_layout.addRow(btn_save)
 
         # pyqtgraph plot
         self.plot_widget = pg.PlotWidget()
@@ -366,7 +370,7 @@ class StageMapWidget(QtWidgets.QWidget):
         self.plot_widget.setBackground('#1e1e2e')
 
         # Stage boundary rectangle
-        self._rect = QtWidgets.QGraphicsRectItem(-10, -10, 20, 20)
+        self._rect = QtWidgets.QGraphicsRectItem(xmin, ymin, xmax - xmin, ymax - ymin)
         self._rect.setPen(pg.mkPen('#74c7ec', width=2, style=QtCore.Qt.DashLine))
         self._rect.setBrush(pg.mkBrush('#1e1e2e00'))
         self.plot_widget.addItem(self._rect)
@@ -408,6 +412,35 @@ class StageMapWidget(QtWidgets.QWidget):
         self.plot_widget.setYRange(ymin - 0.05 * (ymax - ymin),
                                    ymax + 0.05 * (ymax - ymin))
 
+    def _save_limits(self):
+        data = {
+            "xmin": self.x_min_sb.value(),
+            "xmax": self.x_max_sb.value(),
+            "ymin": self.y_min_sb.value(),
+            "ymax": self.y_max_sb.value(),
+        }
+        try:
+            self._file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._file, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not save limits: {e}")
+
+    def _load_limits(self):
+        # valeurs par défaut
+        xmin, xmax, ymin, ymax = -10.0, 10.0, -10.0, 10.0
+        try:
+            if self._file.exists():
+                with open(self._file) as f:
+                    data = json.load(f)
+                xmin = data["xmin"]
+                xmax = data["xmax"]
+                ymin = data["ymin"]
+                ymax = data["ymax"]
+        except Exception as e:
+            logger.warning(f"Could not load limits: {e}")
+        return xmin, xmax, ymin, ymax
+    
     def update_position(self, x: float, y: float):
         self._x, self._y = x, y
         self._pos_marker.setData([x], [y])
@@ -446,9 +479,11 @@ class DualAxisController(CustomExt):
         super().__init__(parent, dashboard)
         self._actuator_x = ''
         self._actuator_y = ''
+        path = Path(str(self.dashboard.preset_file))
+        preset_name = path.stem
+        self.POSITIONS_FILE = Path.home() / '.pymodaq' / f'dual_axis_{preset_name}_positions.json'
+        self.LIMITS_FILE = Path.home() / '.pymodaq' / f'dual_axis_{preset_name}_limits.json'
         self.setup_ui()
-        print(self.settings.child('preset_name').value())
-
     # ------------------------------------------------------------------
     # CustomExt mandatory overrides
     # ------------------------------------------------------------------
@@ -515,14 +550,14 @@ class DualAxisController(CustomExt):
         self.docks['positions'] = gutils.Dock('Saved Positions')
         self.dockarea.addDock(self.docks['positions'], 'bottom', self.docks['control'])
 
-        self.saved_pos_widget = SavedPositionsWidget(POSITIONS_FILE)
+        self.saved_pos_widget = SavedPositionsWidget(self.POSITIONS_FILE)
         self.docks['positions'].addWidget(self.saved_pos_widget)
 
         # ── Dock 3 : stage map ──────────────────────────────────────────
         self.docks['map'] = gutils.Dock('Stage Map')
         self.dockarea.addDock(self.docks['map'], 'right', self.docks['control'])
 
-        self.stage_map = StageMapWidget()
+        self.stage_map = StageMapWidget(self.LIMITS_FILE)
         self.docks['map'].addWidget(self.stage_map)
 
     def setup_actions(self):
