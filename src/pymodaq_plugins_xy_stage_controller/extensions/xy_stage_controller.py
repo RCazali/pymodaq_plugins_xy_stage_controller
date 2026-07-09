@@ -1007,6 +1007,7 @@ class MainUIWidget(QtWidgets.QWidget):
         self.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
         self.tabs_list: list = []
+        self._undo_positions = None
         self._setup_ui()
         self.scan_and_populate_profiles()
 
@@ -1035,6 +1036,16 @@ class MainUIWidget(QtWidgets.QWidget):
         self.btn_save_all_pos = QtWidgets.QPushButton("📸 Save All Positions")
         self.btn_save_all_pos.setStyleSheet("background-color: #8e44ad; color: white; font-weight: bold;")
         self.toolbar.addWidget(self.btn_save_all_pos)
+
+        self.btn_go_all_pos = QtWidgets.QPushButton("🚀 Go to All")
+        self.btn_go_all_pos.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold;")
+        self.toolbar.addWidget(self.btn_go_all_pos)
+
+        self.btn_undo_all_pos = QtWidgets.QPushButton("↩️ Undo Move")
+        self.btn_undo_all_pos.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold;")
+        self.btn_undo_all_pos.setEnabled(False)  # Désactivé tant qu'aucun mouvement global n'a eu lieu
+        self.toolbar.addWidget(self.btn_undo_all_pos)
+
         self.toolbar.addStretch()
 
         self.btn_keyboard = QtWidgets.QPushButton("Keyboard Input: DISABLED")
@@ -1055,6 +1066,8 @@ class MainUIWidget(QtWidgets.QWidget):
         self.btn_keyboard.toggled.connect(self.toggle_keyboard_mode)
         self.profile_combo.currentTextChanged.connect(self.load_profile)
         self.btn_save_all_pos.clicked.connect(self.save_all_tabs_positions)
+        self.btn_go_all_pos.clicked.connect(self.go_to_all_positions)
+        self.btn_undo_all_pos.clicked.connect(self.undo_last_global_move)
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
 
     def toggle_keyboard_mode(self, checked):
@@ -1163,6 +1176,110 @@ class MainUIWidget(QtWidgets.QWidget):
             f"Positions saved across all {len(self.tabs_list)} tabs under the prefix '{base_name}'."
         )
 
+    def go_to_all_positions(self):
+        """Finds all global positions saved under a common prefix, 
+        saves current state for Undo, and moves all matching motors.
+        """
+        if not self.tabs_list:
+            return
+
+        # 1. Collecter tous les noms de positions disponibles dans TOUS les onglets
+        all_prefixes = set()
+        for tab in self.tabs_list:
+            for full_name in tab.saved_pos_widget._positions.keys():
+                if " (" in full_name:
+                    prefix = full_name.split(" (")[0]
+                    all_prefixes.add(prefix)
+                else:
+                    all_prefixes.add(full_name)
+
+        if not all_prefixes:
+            QtWidgets.QMessageBox.warning(self, "Go to All", "No saved positions found in any tab.")
+            return
+
+        # 2. Demander à l'utilisateur de choisir le snapshot global à charger
+        prefix_list = sorted(list(all_prefixes))
+        item, ok = QtWidgets.QInputDialog.getItem(
+            self, "Go to All Positions", 
+            "Select the global snapshot position to restore:", 
+            prefix_list, editable=False
+        )
+        
+        if not ok or not item:
+            return
+
+        # 3. SAUVEGARDE SÉCURITÉ (UNDO) : Enregistrer l'état actuel avant le mouvement
+        self._undo_positions = {}
+        for idx, tab in enumerate(self.tabs_list):
+            self._undo_positions[tab] = {
+                "x": tab.widget_x.current_raw,
+                "y": tab.widget_y.current_raw
+            }
+
+        # 4. EXÉCUTION DU MOUVEMENT GLOBAL DIRECT SUR LE MODULE PYMODAQ
+        move_count = 0
+        for idx, tab in enumerate(self.tabs_list):
+            tab_title = tab.tab_name_edit.text().strip() or f"Group_{idx+1}"
+            expected_name = f"{item} ({tab_title})"
+            
+            pos_data = tab.saved_pos_widget._positions.get(expected_name) or tab.saved_pos_widget._positions.get(item)
+            
+            if pos_data:
+                target_x = pos_data.get("x", 0.0)
+                target_y = pos_data.get("y", 0.0)
+                
+                # Récupérer directement les modules matériels PyMoDAQ (via le helper qui
+                # passe bien mod='act' et gère les erreurs / "None")
+                mod_x = tab._get_module(tab._actuator_x)
+                mod_y = tab._get_module(tab._actuator_y)
+                
+                # C'est ici qu'on appelle DIRECTEMENT l'ordre PyMoDAQ sans passer par le signal du widget
+                if mod_x is not None:
+                    try:
+                        mod_x.move_abs(target_x)
+                        move_count += 1
+                    except Exception as e:
+                        logger.error(f"move_abs X failed for tab '{tab_title}': {e}")
+                if mod_y is not None:
+                    try:
+                        mod_y.move_abs(target_y)
+                        move_count += 1
+                    except Exception as e:
+                        logger.error(f"move_abs Y failed for tab '{tab_title}': {e}")
+
+        if move_count > 0:
+            self.btn_undo_all_pos.setEnabled(True)
+
+    def undo_last_global_move(self):
+        """Restores the exact positions the motors were at before the last 'Go to All' command."""
+        if not self._undo_positions:
+            return
+            
+        move_count = 0
+        for tab, previous_coords in self._undo_positions.items():
+            if tab in self.tabs_list:
+                mod_x = tab._get_module(tab._actuator_x)
+                mod_y = tab._get_module(tab._actuator_y)
+                
+                # Rappeler l'ancienne position directement sur l'actionneur PyMoDAQ
+                if mod_x is not None:
+                    try:
+                        mod_x.move_abs(previous_coords["x"])
+                        move_count += 1
+                    except Exception as e:
+                        logger.error(f"Undo move_abs X failed: {e}")
+                if mod_y is not None:
+                    try:
+                        mod_y.move_abs(previous_coords["y"])
+                        move_count += 1
+                    except Exception as e:
+                        logger.error(f"Undo move_abs Y failed: {e}")
+
+        self._undo_positions = None
+        self.btn_undo_all_pos.setEnabled(False)
+        QtWidgets.QMessageBox.information(self, "Undo Success", f"Restored previous positions on {move_count} axes.")
+
+        
     def add_new_pair(self, config_data=None):
         pair_id = config_data.get("pair_id", f"tab_{QtCore.QDateTime.currentMSecsSinceEpoch()}") if config_data else f"tab_{QtCore.QDateTime.currentMSecsSinceEpoch()}"
         new_pair = StagePairWidget(self.modules_manager, pair_id)
