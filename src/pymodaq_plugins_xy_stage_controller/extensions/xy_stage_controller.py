@@ -1043,7 +1043,7 @@ class MainUIWidget(QtWidgets.QWidget):
 
         self.btn_undo_all_pos = QtWidgets.QPushButton("↩️ Undo Move")
         self.btn_undo_all_pos.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold;")
-        self.btn_undo_all_pos.setEnabled(False)  # Désactivé tant qu'aucun mouvement global n'a eu lieu
+        self.btn_undo_all_pos.setEnabled(False)  # Disabled until a global move has occurred
         self.toolbar.addWidget(self.btn_undo_all_pos)
 
         self.toolbar.addStretch()
@@ -1138,7 +1138,7 @@ class MainUIWidget(QtWidgets.QWidget):
         if not self.tabs_list:
             return
 
-        # Demander un nom de base à l'utilisateur
+        # Ask the user for a base name
         default_name = f"Snapshot_{QtCore.QDateTime.currentDateTime().toString('yyyyMMdd_hhmmss')}"
         name, ok = QtWidgets.QInputDialog.getText(
             self, "Save All Positions", 
@@ -1151,24 +1151,24 @@ class MainUIWidget(QtWidgets.QWidget):
             
         base_name = name.strip()
 
-        # Itérer sur tous les onglets pour enregistrer leurs positions courantes
+        # Iterate over all tabs to record their current positions
         for idx, tab in enumerate(self.tabs_list):
-            # Générer un nom unique par onglet s'ils n'ont pas de titre explicite
+            # Generate a unique name per tab if they have no explicit title
             tab_title = tab.tab_name_edit.text().strip() or f"Group_{idx+1}"
             unique_pos_name = f"{base_name} ({tab_title})"
             
-            # Récupérer les positions X et Y actuelles stockées dans l'onglet
+            # Retrieve the current X and Y positions stored in the tab
             current_x = tab.widget_x.current_raw
             current_y = tab.widget_y.current_raw
             
-            # Injecter directement dans le dictionnaire interne de l'onglet
+            # Inject directly into the tab's internal dictionary
             tab.saved_pos_widget._positions[unique_pos_name] = {"x": current_x, "y": current_y}
             
-            # Rafraîchir l'affichage de la table et de la carte pour cet onglet
+            # Refresh the table and map display for this tab
             tab.saved_pos_widget.refresh_table()
             tab.saved_pos_widget.positions_changed.emit()
             
-        # Forcer une sauvegarde silencieuse dans le fichier JSON du profil
+        # Force a silent save to the profile's JSON file
         self.silent_save_profile()
         
         QtWidgets.QMessageBox.information(
@@ -1183,7 +1183,7 @@ class MainUIWidget(QtWidgets.QWidget):
         if not self.tabs_list:
             return
 
-        # 1. Collecter tous les noms de positions disponibles dans TOUS les onglets
+        # 1. Collect all position names available across ALL tabs
         all_prefixes = set()
         for tab in self.tabs_list:
             for full_name in tab.saved_pos_widget._positions.keys():
@@ -1197,7 +1197,7 @@ class MainUIWidget(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "Go to All", "No saved positions found in any tab.")
             return
 
-        # 2. Demander à l'utilisateur de choisir le snapshot global à charger
+        # 2. Ask the user to choose which global snapshot to restore
         prefix_list = sorted(list(all_prefixes))
         item, ok = QtWidgets.QInputDialog.getItem(
             self, "Go to All Positions", 
@@ -1208,7 +1208,7 @@ class MainUIWidget(QtWidgets.QWidget):
         if not ok or not item:
             return
 
-        # 3. SAUVEGARDE SÉCURITÉ (UNDO) : Enregistrer l'état actuel avant le mouvement
+        # 3. SAFETY BACKUP (UNDO): record the current state before the move
         self._undo_positions = {}
         for idx, tab in enumerate(self.tabs_list):
             self._undo_positions[tab] = {
@@ -1216,7 +1216,7 @@ class MainUIWidget(QtWidgets.QWidget):
                 "y": tab.widget_y.current_raw
             }
 
-        # 4. EXÉCUTION DU MOUVEMENT GLOBAL DIRECT SUR LE MODULE PYMODAQ
+        # 4. DIRECT GLOBAL MOVE EXECUTION ON THE PYMODAQ MODULE
         move_count = 0
         for idx, tab in enumerate(self.tabs_list):
             tab_title = tab.tab_name_edit.text().strip() or f"Group_{idx+1}"
@@ -1228,12 +1228,12 @@ class MainUIWidget(QtWidgets.QWidget):
                 target_x = pos_data.get("x", 0.0)
                 target_y = pos_data.get("y", 0.0)
                 
-                # Récupérer directement les modules matériels PyMoDAQ (via le helper qui
-                # passe bien mod='act' et gère les erreurs / "None")
+                # Retrieve the PyMoDAQ hardware modules directly (via the helper that
+                # correctly passes mod='act' and handles errors / "None")
                 mod_x = tab._get_module(tab._actuator_x)
                 mod_y = tab._get_module(tab._actuator_y)
                 
-                # C'est ici qu'on appelle DIRECTEMENT l'ordre PyMoDAQ sans passer par le signal du widget
+                # This is where we call the PyMoDAQ command DIRECTLY, bypassing the widget signal
                 if mod_x is not None:
                     try:
                         mod_x.move_abs(target_x)
@@ -1261,7 +1261,7 @@ class MainUIWidget(QtWidgets.QWidget):
                 mod_x = tab._get_module(tab._actuator_x)
                 mod_y = tab._get_module(tab._actuator_y)
                 
-                # Rappeler l'ancienne position directement sur l'actionneur PyMoDAQ
+                # Restore the previous position directly on the PyMoDAQ actuator
                 if mod_x is not None:
                     try:
                         mod_x.move_abs(previous_coords["x"])
@@ -1294,8 +1294,18 @@ class MainUIWidget(QtWidgets.QWidget):
         if self.tabs_widget.count() <= 1: 
             return
         widget = self.tabs_widget.widget(index)
+        tab_title = self.tabs_widget.tabText(index)
+        reply = QtWidgets.QMessageBox.question(
+            self, "Close group",
+            f"Are you sure you want to close the group '{tab_title}'?\n"
+            "Any saved positions not yet written to the profile will be lost.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
         if widget in self.tabs_list: 
-            # Déconnexion explicite des signaux hardware avant destruction
+            # Explicitly disconnect hardware signals before destruction
             if hasattr(widget, '_signal_connections'):
                 for sig, slot in widget._signal_connections:
                     try: sig.disconnect(slot)
